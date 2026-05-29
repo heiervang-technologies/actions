@@ -1,0 +1,116 @@
+# Reusable Rust CI — fmt, build, test, clippy with cargo caching.
+#
+# Generalized from director/.github/workflows/ci.yml so any Rust repo in the org
+# can call it. The caller owns the trigger; everything else is configurable via
+# inputs (working dir, toolchain, which steps to run, per-command args).
+#
+#   jobs:
+#     rust:
+#       uses: heiervang-technologies/actions/.github/workflows/rust-ci.yml@v1
+#       with:
+#         working-directory: crates
+name: Rust CI
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: "Directory containing the Cargo workspace/crate."
+        required: false
+        type: string
+        default: "."
+      toolchain:
+        description: "Rust toolchain (stable, nightly, 1.79.0, …)."
+        required: false
+        type: string
+        default: "stable"
+      runs-on:
+        description: "Runner label."
+        required: false
+        type: string
+        default: "ubuntu-latest"
+      apt-packages:
+        description: "Extra apt packages to install before building (space-separated)."
+        required: false
+        type: string
+        default: ""
+      run-fmt:
+        description: "Run `cargo fmt --all --check`."
+        required: false
+        type: boolean
+        default: true
+      run-clippy:
+        description: "Run clippy."
+        required: false
+        type: boolean
+        default: true
+      run-tests:
+        description: "Run the test suite."
+        required: false
+        type: boolean
+        default: true
+      build-args:
+        description: "Args appended to `cargo build`."
+        required: false
+        type: string
+        default: "--all"
+      test-args:
+        description: "Args appended to `cargo test`."
+        required: false
+        type: string
+        default: "--all"
+      clippy-args:
+        description: "Args appended to `cargo clippy`."
+        required: false
+        type: string
+        default: "--all -- -D warnings"
+
+jobs:
+  rust:
+    name: Rust CI
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system packages
+        if: inputs.apt-packages != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ inputs.apt-packages }}
+
+      - name: Install Rust (${{ inputs.toolchain }})
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ inputs.toolchain }}
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ inputs.working-directory }}/target
+          key: ${{ runner.os }}-cargo-${{ inputs.toolchain }}-${{ hashFiles(format('{0}/Cargo.lock', inputs.working-directory)) }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ inputs.toolchain }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Format check
+        if: inputs.run-fmt
+        run: cargo fmt --all --check
+
+      - name: Build
+        run: cargo build ${{ inputs.build-args }}
+
+      - name: Test
+        if: inputs.run-tests
+        run: cargo test ${{ inputs.test-args }}
+
+      - name: Clippy
+        if: inputs.run-clippy
+        run: cargo clippy ${{ inputs.clippy-args }}

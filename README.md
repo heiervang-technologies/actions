@@ -119,6 +119,38 @@ jobs:
 
 > ⚠️ **This gives an LLM broad permissions in CI.** PR/comment contents are untrusted and can attempt prompt injection. Wire it only to events you trust (avoid `pull_request_target` and untrusted forks), grant the calling job the *least* `permissions` the task needs, and pin to a tag or SHA — not `@main`. `issue_comment` runs on the default branch and doesn't check out the PR head; the agent still reads the diff via `gh pr diff`, but add a checkout of the PR ref if it needs the changed files on disk.
 
+## Rust CI (`rust-ci.yml`)
+
+Reusable workflow that runs `cargo fmt --check`, `build`, `test`, and `clippy -D warnings` with cargo caching. Generalized from `director`'s CI so any Rust repo in the org can call it; the caller owns the trigger.
+
+### Inputs
+
+| Input | Default | Description |
+|---|---|---|
+| `working-directory` | `.` | Directory containing the Cargo workspace/crate. |
+| `toolchain` | `stable` | Rust toolchain (`stable`, `nightly`, `1.79.0`, …). |
+| `runs-on` | `ubuntu-latest` | Runner label. |
+| `apt-packages` | `""` | Extra apt packages to install before building (space-separated). |
+| `run-fmt` / `run-clippy` / `run-tests` | `true` | Toggle individual steps. |
+| `build-args` | `--all` | Appended to `cargo build`. |
+| `test-args` | `--all` | Appended to `cargo test`. |
+| `clippy-args` | `--all -- -D warnings` | Appended to `cargo clippy`. |
+
+### Usage
+
+```yaml
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  rust:
+    uses: heiervang-technologies/actions/.github/workflows/rust-ci.yml@v1
+    with:
+      working-directory: crates
+```
+
 ## Versioning
 
 - Tag stable releases as `v1`, `v2`, etc.
