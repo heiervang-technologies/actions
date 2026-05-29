@@ -41,6 +41,78 @@ jobs:
     secrets: inherit
 ```
 
+## Unleash — autonomous agent (`unleash.yml`)
+
+Runs [Claude Code](https://github.com/anthropics/claude-code) as a fully autonomous agent inside the runner: it installs the CLI, launches it in a tmux session (PTY), and runs headless with `--dangerously-skip-permissions`. With no `task` it reviews the triggering PR and posts the review via `gh`; with a `task` it does whatever you tell it.
+
+It's a reusable workflow — **the caller picks the trigger** (PR, `@claude` comment, label, schedule, manual) and passes inputs.
+
+### Inputs
+
+| Input | Default | Description |
+|---|---|---|
+| `task` | `""` | What the agent should do. Empty → review the triggering PR. |
+| `model` | `sonnet` | Model alias or full ID (`sonnet`, `opus`, `haiku`, `claude-sonnet-4-6`, …). |
+| `timeout_minutes` | `20` | Hard wall-clock cap on the run. |
+| `runs_on` | `ubuntu-latest` | Runner label. |
+| `claude_args` | `""` | Extra flags passed verbatim to `claude`, e.g. `--max-turns 30 --allowedTools Bash,Read,Edit`. |
+
+Secret `anthropic_api_key` is **required**.
+
+### Auto-review every PR
+
+```yaml
+# .github/workflows/review.yml — in the consuming repo
+name: Claude review
+on:
+  pull_request:
+    types: [opened, synchronize]
+jobs:
+  review:
+    uses: heiervang-technologies/actions/.github/workflows/unleash.yml@v1
+    permissions:
+      contents: read
+      pull-requests: write
+    secrets:
+      anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+### On-demand via `@claude` comment
+
+```yaml
+on:
+  issue_comment:
+    types: [created]
+jobs:
+  agent:
+    if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, '@claude') }}
+    uses: heiervang-technologies/actions/.github/workflows/unleash.yml@v1
+    with:
+      task: ${{ github.event.comment.body }}
+    secrets:
+      anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+### Custom / scheduled task
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      task: { type: string }
+jobs:
+  run:
+    uses: heiervang-technologies/actions/.github/workflows/unleash.yml@v1
+    with:
+      task: ${{ inputs.task }}
+      model: opus
+      timeout_minutes: 45
+    secrets:
+      anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+> ⚠️ **This gives an LLM broad permissions in CI.** PR/comment contents are untrusted and can attempt prompt injection. Wire it only to events you trust (avoid `pull_request_target` and untrusted forks), grant the calling job the *least* `permissions` the task needs, and pin to a tag or SHA — not `@main`. `issue_comment` runs on the default branch and doesn't check out the PR head; the agent still reads the diff via `gh pr diff`, but add a checkout of the PR ref if it needs the changed files on disk.
+
 ## Versioning
 
 - Tag stable releases as `v1`, `v2`, etc.

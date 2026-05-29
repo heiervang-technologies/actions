@@ -1,0 +1,140 @@
+# Unleash — run Claude Code as a fully autonomous agent inside a GitHub Actions runner.
+#
+# This is a reusable workflow (`workflow_call`): the CALLER decides the trigger
+# (on PR, on `@claude` comment, on a label, on a schedule, manually, …) and passes
+# a task. With no task it defaults to reviewing the pull request that triggered it.
+#
+# The agent runs headless inside a tmux session (PTY) with `--dangerously-skip-permissions`,
+# so it can read the repo, run tools, post PR reviews, and push commits unattended.
+#
+# ⚠️  This grants an LLM broad permissions in CI. PR contents are untrusted input and can
+#     attempt prompt injection. Only wire this to events you trust (e.g. PRs from the same
+#     repo, not forks), scope `claude_args`/the GITHUB_TOKEN as tightly as the task allows,
+#     and pin this workflow to a tag or SHA in consumers — not `@main`.
+name: Unleash
+
+on:
+  workflow_call:
+    inputs:
+      task:
+        description: "What the agent should do. If empty, it reviews the triggering PR."
+        required: false
+        type: string
+        default: ""
+      model:
+        description: "Model alias or full ID (e.g. sonnet, opus, haiku, claude-sonnet-4-6)."
+        required: false
+        type: string
+        default: "sonnet"
+      timeout_minutes:
+        description: "Hard wall-clock cap on the agent run."
+        required: false
+        type: number
+        default: 20
+      runs_on:
+        description: "Runner label for the job."
+        required: false
+        type: string
+        default: "ubuntu-latest"
+      claude_args:
+        description: "Extra flags passed verbatim to `claude` (e.g. '--max-turns 30 --allowedTools Bash,Read,Edit')."
+        required: false
+        type: string
+        default: ""
+    secrets:
+      anthropic_api_key:
+        description: "Anthropic API key the agent authenticates with."
+        required: true
+
+concurrency:
+  group: unleash-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unleash:
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Claude Code + tmux
+        run: |
+          set -euo pipefail
+          npm install -g @anthropic-ai/claude-code
+          command -v tmux >/dev/null 2>&1 || (sudo apt-get update && sudo apt-get install -y tmux)
+          claude --version
+
+      - name: Unleash agent in tmux
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.anthropic_api_key }}
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TASK: ${{ inputs.task }}
+          MODEL: ${{ inputs.model }}
+          CLAUDE_ARGS: ${{ inputs.claude_args }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+
+          TASK_FILE="$RUNNER_TEMP/task.md"
+          LOG="$RUNNER_TEMP/claude.log"
+          STATUS="$RUNNER_TEMP/claude.status"
+          RUN="$RUNNER_TEMP/run-claude.sh"
+
+          # 1. Build the task prompt — fall back to a PR review when none is given.
+          if [ -n "${INPUT_TASK}" ]; then
+            printf '%s\n' "${INPUT_TASK}" > "$TASK_FILE"
+          elif [ -n "${PR_NUMBER}" ]; then
+            {
+              echo "You are Claude Code running UNATTENDED in GitHub Actions with full permissions."
+              echo "Review pull request #${PR_NUMBER} in ${GITHUB_REPOSITORY}."
+              echo
+              echo "1. Run: gh pr diff ${PR_NUMBER}  (and read any files you need from the checkout in \$PWD)."
+              echo "2. Look for correctness bugs, security issues, and clear quality problems. Be specific; cite file:line."
+              echo "3. Post the review: gh pr review ${PR_NUMBER} --comment --body \"<your findings>\""
+              echo "   Use --request-changes only for clear, blocking bugs; otherwise --comment."
+              echo "4. If nothing significant, post a short LGTM. Do not push commits unless the task says so."
+            } > "$TASK_FILE"
+          else
+            echo "No 'task' input and not a pull_request event — nothing to do." >&2
+            exit 1
+          fi
+
+          echo "::group::Task prompt"
+          cat "$TASK_FILE"
+          echo "::endgroup::"
+
+          # 2. Generate a wrapper script so quoting/PIPESTATUS stay sane.
+          {
+            echo '#!/usr/bin/env bash'
+            echo 'set -o pipefail'
+            echo "claude -p \"\$(cat '$TASK_FILE')\" --model '$MODEL' --bare --dangerously-skip-permissions --output-format text $CLAUDE_ARGS 2>&1 | tee '$LOG'"
+            echo "echo \"\${PIPESTATUS[0]}\" > '$STATUS'"
+          } > "$RUN"
+          chmod +x "$RUN"
+
+          # 3. Spin the agent up inside tmux (gives it a PTY) and wait for it to finish.
+          tmux new-session -d -s claude -x 220 -y 50 "bash '$RUN'"
+          echo "Agent launched in tmux session 'claude'; waiting for completion…"
+          while tmux has-session -t claude 2>/dev/null; do
+            sleep 5
+          done
+
+          # 4. Surface output and propagate the agent's exit code.
+          echo "::group::Agent output"
+          cat "$LOG" 2>/dev/null || echo "(no output captured)"
+          echo "::endgroup::"
+          code="$(cat "$STATUS" 2>/dev/null || echo 1)"
+          echo "Agent exited with code ${code}."
+          exit "${code}"
