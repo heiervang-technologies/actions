@@ -1,0 +1,41 @@
+# Self-CI: lint this repo's own workflows and composite actions on every PR.
+# The repo's product is reusable workflows and actions, so a broken YAML or shell
+# bug here breaks every consumer — this is the guardrail that keeps main green.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint workflows & actions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install actionlint
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/download-actionlint.bash" \
+            https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash
+          bash "$RUNNER_TEMP/download-actionlint.bash" 1.7.12 "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Lint workflows (actionlint + shellcheck)
+        run: actionlint -color
+
+      - name: Lint composite actions (shellcheck)
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml' 2>/dev/null || { sudo apt-get update && sudo apt-get install -y python3-yaml; }
+          bash .github/scripts/lint-actions.sh
