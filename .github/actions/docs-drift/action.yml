@@ -1,0 +1,63 @@
+name: 'Docs drift check'
+description: 'Warn when code paths change in a PR without a corresponding docs path change.'
+author: 'Heiervang Technologies'
+
+inputs:
+  code-paths:
+    description: |
+      Extended regex matching code paths to monitor. Drift fires when at
+      least one changed file matches this pattern and no changed file
+      matches docs-paths. Example: '^(bin/|crates/)'
+    required: true
+  docs-paths:
+    description: |
+      Extended regex matching docs paths. A change to any matching path
+      counts as a corresponding docs update. Defaults to '^docs/'.
+    required: false
+    default: '^docs/'
+  base-ref:
+    description: |
+      Base ref to diff against. Defaults to the PR base ref. Override
+      when calling outside of a pull_request event (e.g. from a workflow
+      that runs on push and wants to compare against main).
+    required: false
+    default: ${{ github.base_ref }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Compute drift
+      shell: bash
+      env:
+        CODE_PATHS: ${{ inputs.code-paths }}
+        DOCS_PATHS: ${{ inputs.docs-paths }}
+        BASE_REF: ${{ inputs.base-ref }}
+      run: |
+        set -euo pipefail
+
+        if [[ -z "${BASE_REF}" ]]; then
+          echo "::error::base-ref input is empty. Set it explicitly when not running on a pull_request event."
+          exit 1
+        fi
+
+        # actions/checkout default fetch-depth is 1; the diff needs history.
+        # Fetch the base ref if it is not already present.
+        if ! git rev-parse --verify "origin/${BASE_REF}" >/dev/null 2>&1; then
+          git fetch --depth=1 origin "${BASE_REF}" >/dev/null 2>&1 || {
+            echo "::error::Could not fetch origin/${BASE_REF}. Caller should checkout with fetch-depth: 0 or pre-fetch the base ref."
+            exit 1
+          }
+        fi
+
+        changed=$(git diff --name-only "origin/${BASE_REF}...HEAD")
+
+        code_changed=$(printf '%s\n' "${changed}" | grep -E "${CODE_PATHS}" || true)
+        docs_changed=$(printf '%s\n' "${changed}" | grep -E "${DOCS_PATHS}" || true)
+
+        if [[ -n "${code_changed}" && -z "${docs_changed}" ]]; then
+          echo "::warning::Code changed in paths matching '${CODE_PATHS}' without touching '${DOCS_PATHS}' — consider updating docs."
+          echo "Changed code files:"
+          printf '%s\n' "${code_changed}"
+        else
+          echo "Docs drift check passed."
+        fi

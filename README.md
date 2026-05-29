@@ -20,6 +20,12 @@ This repo is public so it can be consumed from both public and private repos in 
 
 Pin consumers to a tag or SHA in production, not `@main`.
 
+## Available actions
+
+| Action | Purpose |
+|---|---|
+| [`docs-drift`](.github/actions/docs-drift/) | Warn when a PR changes code paths without touching docs paths. |
+
 ## Consuming an action
 
 Composite action:
