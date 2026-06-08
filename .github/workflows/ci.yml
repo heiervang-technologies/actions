@@ -18,10 +18,15 @@ concurrency:
 jobs:
   lint:
     name: Lint workflows & actions
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install shellcheck (self-hosted runner image lacks it)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
 
       - name: Install actionlint
         run: |
@@ -42,7 +47,7 @@ jobs:
 
   trailer-hygiene:
     name: Trailer hygiene (no Claude attribution)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     if: github.event_name == 'pull_request'
     permissions:
       contents: read
