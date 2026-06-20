@@ -19,6 +19,11 @@ on:
         required: false
         type: string
         default: "."
+      cache-key-prefix:
+        description: "Prefix for the cargo cache key to allow cache invalidation."
+        required: false
+        type: string
+        default: "v2"
       toolchain:
         description: "Rust toolchain (stable, nightly, 1.79.0, …)."
         required: false
@@ -74,6 +79,8 @@ jobs:
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
+    env:
+      CARGO_HOME: ${{ github.workspace }}/.cargo-home
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -92,13 +99,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            ${{ github.workspace }}/.cargo-home/registry
+            ${{ github.workspace }}/.cargo-home/git
             ${{ inputs.working-directory }}/target
-          key: ${{ runner.os }}-cargo-${{ inputs.toolchain }}-${{ hashFiles(format('{0}/Cargo.lock', inputs.working-directory)) }}
+          key: ${{ inputs.cache-key-prefix }}-${{ inputs.runs-on }}-${{ runner.os }}-cargo-${{ inputs.toolchain }}-${{ hashFiles(format('{0}/Cargo.lock', inputs.working-directory)) }}
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ inputs.toolchain }}-
-            ${{ runner.os }}-cargo-
+            ${{ inputs.cache-key-prefix }}-${{ inputs.runs-on }}-${{ runner.os }}-cargo-${{ inputs.toolchain }}-
+            ${{ inputs.cache-key-prefix }}-${{ inputs.runs-on }}-${{ runner.os }}-cargo-
 
       - name: Format check
         if: inputs.run-fmt
